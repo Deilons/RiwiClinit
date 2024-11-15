@@ -44,7 +44,7 @@ class RegisteredUserController extends Controller
             'email' => $request->email,
             'password' => Hash::make($request->password),
             'phoneNumber' => $request->phoneNumber,
-            'role' => 'patient',
+            'role' => 'patient', // Default role is 'patient'
 
         ]);
 
