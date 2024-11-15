@@ -2,76 +2,109 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
 use App\Models\Appointment;
-
+use App\Models\Doctor;
+use App\Models\Patient;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class AppointmentController extends Controller
 {
-    // Get all appointments with associated doctors and patients
+    // Get appointments for the logged-in user
     public function index()
     {
-        $appointments = Appointment::with(['doctor.user', 'patient.user'])->get();
+        $user = Auth::user();
+
+        if ($user->role === 'doctor') {
+            $appointments = Appointment::where('doctor_id', $user->doctor->id)
+                ->with(['patient.user'])
+                ->get();
+        } elseif ($user->role === 'patient') {
+            $appointments = Appointment::where('patient_id', $user->patient->id)
+                ->with(['doctor.user'])
+                ->get();
+        } else {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
         return response()->json($appointments);
     }
 
-    // Create a new appointment
-    public function store()
+    // Create a new appointment (for patients only)
+    public function store(Request $request)
     {
+        $user = Auth::user();
+
+        if ($user->role !== 'patient') {
+            return response()->json(['message' => 'Only patients can create appointments'], 403);
+        }
+
         $request->validate([
-            'patient_id' => 'required|exists:patients,id',
             'doctor_id' => 'required|exists:doctors,id',
-            'date' => 'required|date',
+            'date' => 'required|date|after:now',
+            'reason' => 'required|string',
         ]);
 
-    $existingAppointment = Appointment::where('doctor_id', $request->doctor_id)
-        ->where('date', $request->date)
-        ->first();
+        $appointment = Appointment::create([
+            'patient_id' => $user->patient->id,
+            'doctor_id' => $request->doctor_id,
+            'date' => $request->date,
+            'reason' => $request->reason,
+            'status' => 'scheduled',
+        ]);
 
-    if ($existingAppointment) {
-        return response()->json(['error' => 'Doctor is not available at this time'], 400);
+        return response()->json($appointment, 201);
     }
 
-    $appointment = Appointment::create([
-        'patient_id' => $request->patient_id,
-        'doctor_id' => $request->doctor_id,
-        'date' => $request->date,
-        'status' => 'scheduled',
-    ]);
-
-    return response()->json($appointment, 201);
-
-    }
-
-    // Show a single appointment by ID
-    public function show($id)
+    // Add or update a note to an appointment (for doctors only)
+    public function addDoctorNote(Request $request, $appointmentId)
     {
-        $appointment = Appointment::with(['doctor.user', 'patient.user'])->findOrFail($id);
-        return response()->json($appointment);
-    }
+        $user = Auth::user();
 
-    // Update an existing appointment
-    public function update(Request $request, $id)
-    {
+        if ($user->role !== 'doctor') {
+            return response()->json(['message' => 'Only doctors can add notes'], 403);
+        }
+
+        $appointment = Appointment::where('id', $appointmentId)
+            ->where('doctor_id', $user->doctor->id)
+            ->first();
+
+        if (!$appointment) {
+            return response()->json(['message' => 'Appointment not found'], 404);
+        }
+
         $request->validate([
-            'status' => 'required|in:scheduled,completed,cancelled',
+            'notes' => 'required|string',
         ]);
 
-        $appointment = Appointment::findOrFail($id);
-        $appointment->update([
-            'status' => $request->status,
-        ]);
+        $appointment->notes = $request->notes;
+        $appointment->save();
 
-        return response()->json($appointment);
+        return response()->json(['message' => 'Note added successfully', 'appointment' => $appointment]);
     }
 
-    // Delete an existing appointment
-    public function destroy($id)
+    // Cancel an appointment (for both doctors and patients)
+    public function cancel($appointmentId)
     {
-        $appointment = Appointment::findOrFail($id);
-        $appointment->delete();
+        $user = Auth::user();
 
-        return response()->json(['message' => 'Appointment deleted successfully']);
+        $appointment = Appointment::where('id', $appointmentId)
+            ->where(function ($query) use ($user) {
+                if ($user->role === 'doctor') {
+                    $query->where('doctor_id', $user->doctor->id);
+                } elseif ($user->role === 'patient') {
+                    $query->where('patient_id', $user->patient->id);
+                }
+            })
+            ->first();
+
+        if (!$appointment) {
+            return response()->json(['message' => 'Appointment not found'], 404);
+        }
+
+        $appointment->status = 'cancelled';
+        $appointment->save();
+
+        return response()->json(['message' => 'Appointment cancelled successfully']);
     }
-
 }
